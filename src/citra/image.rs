@@ -126,17 +126,15 @@ impl Image {
             return Ok(());
         }
         // Diagonal line
-        todo!("Diagonal line drawing");
-        let mut e : f32 = 0.0;
-        let de = (dy/dx) as f32;
-        let mut y = 0;
+        let mut d : isize = (2*dy - dx).try_into().unwrap();
+        let mut y = y1;
         for x in x1..x2 {
-            //draw it
-            e = e + de;
-            if f32::abs(e) >= 0.5 {
+            self.data[x + y * self.w] = pixel.clone();
+            if d > 0 {
                 y = y + 1;
-                e = e - 1.0;
+                d = d - (2 * dx) as isize;
             }
+            d = d + (2 * dy) as isize;
         }
         Ok(())
     }
