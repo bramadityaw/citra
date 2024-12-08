@@ -2,12 +2,22 @@ use std::io::{self, Write};
 use std::default::Default;
 use std::fs::File;
 
+pub type Point = (usize, usize);
+
 #[derive(Default, Clone)]
 pub struct Pixel {
     r: u8,
     g: u8,
     b: u8,
 }
+
+impl Pixel {
+    pub fn triple(&self) -> (u8, u8, u8) {
+        (self.r, self.g, self.b)
+    }
+}
+
+type FilterFunc = fn (Pixel) -> Pixel;
 
 pub enum Color {
     White,
@@ -42,23 +52,75 @@ impl From<ImageError<String>> for io::Error {
     }
 }
 
-pub struct Image {
+pub struct BinImage {
+    w: usize,
+    h: usize,
+    data: Vec<u8>,
+}
+
+impl BinImage {
+    pub fn new(w: usize, h: usize) -> Self {
+        BinImage {
+            w,
+            h,
+            data: vec![0; w*h],
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RGBImage {
     w: usize,
     h: usize,
     depth: usize,
     data: Vec<Pixel>,
 }
 
-pub type Point = (usize, usize);
-
-impl Image {
+impl RGBImage {
     pub fn new(w: usize, h: usize, depth: usize) -> Self {
-        Image {
-            w: w,
-            h: h,
-            depth: depth,
+        RGBImage {
+            w,
+            h,
+            depth,
             data: vec![Default::default(); w*h],
         }
+    }
+
+    pub fn filter(self, f: FilterFunc) -> Self {
+        let mut img = RGBImage::new(self.w, self.h, self.depth);
+        for i in 0..self.data.len() {
+            img.data[i] = f(self.data[i].clone());
+        }
+        img
+    }
+
+    pub fn into_binary(&self, thresh: u8) -> BinImage {
+        let mut bin = BinImage::new(self.w, self.h);
+        let ori = self.to_grayscale();
+        assert_eq!(bin.data.len(), self.data.len());
+        for i in 0..self.data.len() {
+            let px = ori.data[i].r;
+            bin.data[i] = if px >= thresh {
+                1
+            } else {
+                0
+            };
+        }
+
+        bin
+    }
+
+    pub fn to_grayscale(&self) -> Self {
+        self.clone().filter(|px| {
+            let y = (0.299 * px.r as f32 +
+                     0.587 * px.g as f32 +
+                     0.144 * px.b as f32).floor() as u8;
+            Pixel {
+                r: y,
+                g: y,
+                b: y,
+            }
+        })
     }
 
     pub fn fill(&mut self, color: Color) {
