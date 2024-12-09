@@ -2,52 +2,51 @@ use std::io::{self, Write};
 use std::default::Default;
 use std::fs::File;
 
+use crate::citra::filter::{Filter, FilterFunc};
+use crate::citra::filter;
+use crate::citra::draw::{Draw, DrawErr};
+
 pub type Point = (usize, usize);
 
-#[derive(Default, Clone)]
+#[derive(Default, Copy, Clone)]
 pub struct Pixel {
-    r: u8,
-    g: u8,
-    b: u8,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
-impl Pixel {
-    pub fn triple(&self) -> (u8, u8, u8) {
-        (self.r, self.g, self.b)
+pub trait AsPixel {
+    fn as_pixel(&self) -> Pixel;
+}
+
+impl AsPixel for Pixel {
+    fn as_pixel(&self) -> Pixel {
+        *self
     }
 }
 
-type FilterFunc = fn (Pixel) -> Pixel;
+pub trait Image {
+    fn new(w: usize, h: usize) -> Self;
+    fn dims(&self) -> (usize, usize);
 
-pub enum Color {
-    White,
-    Black,
-    Red,
-    Green,
-    Blue,
+    fn size(&self) -> usize {
+        let (w, h) = self.dims();
+        w * h
+    }
 }
 
-impl Color {
-    pub fn as_pixel(&self) -> Pixel {
+#[derive(Clone)]
+pub enum BinVal {
+    Object,
+    Backgr,
+}
+
+impl AsPixel for BinVal {
+    fn as_pixel(&self) -> Pixel {
+        use crate::citra::color::Color;
         match *self {
-            Color::Black => Default::default(),
-            Color::White => Pixel {r: 255, g: 255, b: 255},
-            Color::Red   => Pixel {r: 255, g: 0, b: 0},
-            Color::Green => Pixel {r: 0, g: 255, b: 0},
-            Color::Blue  => Pixel {r: 0, g: 0, b: 255},
-        }
-    }
-}
-
-pub enum ImageError<E> {
-    EditError(E),
-}
-
-impl From<ImageError<String>> for io::Error {
-    fn from(img: ImageError<String>) -> io::Error {
-        use io::Error;
-        match img {
-            ImageError::EditError(msg) => Error::other(msg),
+            BinVal::Object => Color::Black.as_pixel(),
+            BinVal::Backgr => Color::White.as_pixel(),
         }
     }
 }
@@ -55,20 +54,24 @@ impl From<ImageError<String>> for io::Error {
 pub struct BinImage {
     w: usize,
     h: usize,
-    data: Vec<u8>,
+    data: Vec<BinVal>,
 }
 
-impl BinImage {
-    pub fn new(w: usize, h: usize) -> Self {
+impl Image for BinImage {
+    fn new(w: usize, h: usize) -> Self {
         BinImage {
             w,
             h,
-            data: vec![0; w*h],
+            data: vec![BinVal::Backgr; w*h],
         }
+    }
+
+    fn dims(&self) -> (usize, usize) {
+        (self.w, self.h)
     }
 }
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct RGBImage {
     w: usize,
     h: usize,
@@ -76,34 +79,41 @@ pub struct RGBImage {
     data: Vec<Pixel>,
 }
 
-impl RGBImage {
-    pub fn new(w: usize, h: usize, depth: usize) -> Self {
+impl Image for RGBImage {
+    fn new(w: usize, h: usize) -> Self {
         RGBImage {
             w,
             h,
-            depth,
-            data: vec![Default::default(); w*h],
+            depth: u8::MAX as usize,
+            data: vec![Pixel::default(); w*h],
         }
     }
 
-    pub fn filter(self, f: FilterFunc) -> Self {
-        let mut img = RGBImage::new(self.w, self.h, self.depth);
+    fn dims(&self) -> (usize, usize) {
+        (self.w, self.h)
+    }
+}
+
+impl Filter for RGBImage {
+    fn filter(self, f: FilterFunc) -> Self {
+        let mut img = Self::new(self.w, self.h);
         for i in 0..self.data.len() {
-            img.data[i] = f(self.data[i].clone());
+            img.data[i] = f(self.data[i]);
         }
         img
     }
+}
 
+impl RGBImage {
     pub fn into_binary(&self, thresh: u8) -> BinImage {
         let mut bin = BinImage::new(self.w, self.h);
         let ori = self.to_grayscale();
-        assert_eq!(bin.data.len(), self.data.len());
         for i in 0..self.data.len() {
             let px = ori.data[i].r;
             bin.data[i] = if px >= thresh {
-                1
+                BinVal::Object
             } else {
-                0
+                BinVal::Backgr
             };
         }
 
@@ -111,19 +121,10 @@ impl RGBImage {
     }
 
     pub fn to_grayscale(&self) -> Self {
-        self.clone().filter(|px| {
-            let y = (0.299 * px.r as f32 +
-                     0.587 * px.g as f32 +
-                     0.144 * px.b as f32).floor() as u8;
-            Pixel {
-                r: y,
-                g: y,
-                b: y,
-            }
-        })
+        self.clone().filter(filter::grayscale)
     }
 
-    pub fn fill(&mut self, color: Color) {
+    pub fn fill(&mut self, color: impl AsPixel) {
         self.data.fill(color.as_pixel());
     }
 
@@ -138,66 +139,20 @@ impl RGBImage {
         }
         Ok(())
     }
-    
+
     fn header(&self) -> String {
         format!("P6 {} {} {} ", self.w, self.h, self.depth)
     }
+}
 
-    pub fn draw_dot_color(&mut self, point: Point, color: Color) -> Result<(), ImageError<String>> {
-        self.draw_dot(point, color.as_pixel())?;
-        Ok(())
-    }
-
-    pub fn draw_dot(&mut self, point: Point, pixel: Pixel) -> Result<(), ImageError<String>> {
+impl Draw for RGBImage {
+    fn draw_dot(&mut self, point: Point, pixel: Pixel) -> Result<(), DrawErr> {
         let (x, y) = point;
         if x > self.w || y > self.h {
-            let msg = format!("Point out of bounds.\nImage width: {}\nImage height: {}\nAttempt to draw point: {} {}\n", self.w, self.h, x, y);
-            return Err(ImageError::EditError(msg));
+            eprintln!("Point out of bounds.\nImage width: {}\nImage height: {}\nAttempt to draw point: {} {}", self.w, self.h, x, y);
+            return Err(DrawErr::OutOfBounds);
         }
         self.data[x + y * self.w] = pixel;
-        Ok(())
-    }
-
-    pub fn draw_line_color(&mut self, from: Point, to: Point, color: Color) -> Result<(), ImageError<String>> {
-        self.draw_line(from, to, color.as_pixel())?;
-        Ok(())
-    }
-
-    pub fn draw_line(&mut self, from: Point, to: Point, pixel: Pixel) -> Result<(), ImageError<String>> {
-        let (x1, y1) = from;
-        let (x2, y2) = to;
-        if x1 > self.w || x2 > self.w || y1 > self.h || y2 > self.h {
-            let msg = format!("Point out of bounds.\nImage width: {}\nImage height: {}\nAttempt to draw these points:\n\tfrom: {} {}\n\tto: {} {}\n", self.w, self.h, x1, y1, x2, y2);
-            return Err(ImageError::EditError(msg));
-        }
-        let (dx, dy) = (x2.abs_diff(x1), y2.abs_diff(y1));
-        if dx == 0 {
-        // Straight vertical line
-            let x = x1;
-            for y in y1..y2 {
-                self.data[x + y * self.w] = pixel.clone();
-            }
-            return Ok(());
-        }
-        if dy == 0 {
-        // Straight horizontal line
-            let y = y1;
-            for x in x1..x2 {
-                self.data[x + y * self.w] = pixel.clone();
-            }
-            return Ok(());
-        }
-        // Diagonal line
-        let mut d : isize = (2*dy - dx).try_into().unwrap();
-        let mut y = y1;
-        for x in x1..x2 {
-            self.data[x + y * self.w] = pixel.clone();
-            if d > 0 {
-                y = y + 1;
-                d = d - (2 * dx) as isize;
-            }
-            d = d + (2 * dy) as isize;
-        }
         Ok(())
     }
 }
