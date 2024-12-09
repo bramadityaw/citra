@@ -11,6 +11,12 @@ PPM is the only file format supported as of right now because it is the easiest 
     - [ ] Triangle
     - [ ] Circle
 
+- [ ] Read & parse image formats:
+    - [ ] ppm
+    - [ ] png
+    - [ ] jpeg
+    - etc..
+
 - [ ] Image transformation:
     - [ ] Flip, Rotate, etc..
     - [ ] Negate
