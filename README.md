@@ -6,7 +6,7 @@ PPM is the only file format supported as of right now because it is the easiest 
 
 ## To Do
 - [ ] Primitive shapes:
-    - [ ] Lines (Only diagonal lines left)
+    - [x] Lines
     - [ ] Rectangle
     - [ ] Triangle
     - [ ] Circle
